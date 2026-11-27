@@ -20,7 +20,7 @@ class MainActivity : Activity() {
         }
         l.addView(TextView(this).apply {
             text = "Do 1 and 2 once. Then press 3 and open the game. " +
-                "Bubble: tap = bot on/off, long-press = set attack button position, drag = move."
+                "Bubble: tap = cycle OFF, ATK (attack only), AUTO (attack + walk to minions), long-press = set attack button position, drag = move."
             textSize = 15f
         })
         btn("1. Allow overlay") {
