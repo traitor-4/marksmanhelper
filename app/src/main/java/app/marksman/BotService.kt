@@ -143,35 +143,35 @@ class BotService : Service() {
                 mv = floatArrayOf(TapService.jx + dx / d * r, TapService.jy + dy / d * r)
             }
         }
-        setLabel((if (mode == 2) "AUTO\n" else "BOT\n") + pct, 0xFF4CAF50.toInt())
+        setLabel((if (mode == 2) "AUTO\n" else "BOT\n") + pct + (if (mode == 2) (if (minion) "\nMIN" else "\nno min") else ""), 0xFF4CAF50.toInt())
         lastOwnTap = now
         drive(true, mv)
     }
 
-    private fun mred(b: ByteBuffer, s: Int, x: Int, y: Int): Boolean {
+    /** Minion bar colours: enemy = red, ally = green. */
+    private fun barCol(b: ByteBuffer, s: Int, x: Int, y: Int, ally: Boolean): Boolean {
         val p = px(b, s, x, y); val r = (p shr 16) and 255; val g = (p shr 8) and 255; val bl = p and 255
-        return r > 150 && g in 16..74 && bl in 11..69 && r - g > 100
+        return if (ally) g > 140 && r < 130 && bl < 110 && g - r > 50
+        else r > 150 && g in 16..74 && bl in 11..69 && r - g > 100
     }
     private fun blk(b: ByteBuffer, s: Int, x: Int, y: Int): Boolean {
         val p = px(b, s, x, y); return ((p shr 16) and 255) < 14 && ((p shr 8) and 255) < 14 && (p and 255) < 14
     }
 
-    /** Nearest enemy minion HP bar (small red bar with black empty part). Sets minX/minY. */
-    private fun findMinion(b: ByteBuffer, s: Int): Boolean {
+    /** Small minion HP bars (coloured fill + black empty part). Adds (centreX, y) to out. */
+    private fun scanBars(b: ByteBuffer, s: Int, ally: Boolean, out: ArrayList<FloatArray>) {
         val sc = H / 1080f
         val lo = (50 * sc).toInt(); val hi = (66 * sc).toInt()
         val step = max(1, (2 * sc).toInt())
-        var bestD = Float.MAX_VALUE
-        var found = false
-        var y = (H * 0.13f).toInt()
+        var y = (H * 0.09f).toInt()
         val yEnd = (H * 0.95f).toInt()
         while (y < yEnd) {
             var x = 1
             while (x < W - hi - 2) {
                 val skip = (x < 480 * sc && y < 380 * sc) || (x > W - 528 * sc && y > 486 * sc)
-                if (!skip && mred(b, s, x, y) && !mred(b, s, x - 1, y)) {
+                if (!skip && barCol(b, s, x, y, ally) && !barCol(b, s, x - 1, y, ally)) {
                     var last = x; var k = x + 1
-                    while (k < x + hi && k - last <= 6) { if (mred(b, s, k, y)) last = k; k++ }
+                    while (k < x + hi && k - last <= 6) { if (barCol(b, s, k, y, ally)) last = k; k++ }
                     val rr = last - x + 1
                     var t = last + 1
                     while (t < last + 6 && !blk(b, s, t, y)) t++
@@ -180,13 +180,11 @@ class BotService : Service() {
                     while (t < x + hi && blk(b, s, t, y)) { t++; tl++ }
                     val tot = (t0 - last - 1) + rr + tl
                     if (rr >= 3 && tot >= lo && tot <= hi && (tl >= 3 || rr >= lo)) {
-                        var u = y; while (u > 0 && mred(b, s, x + 1, u - 1)) u--
-                        var v = y; while (v < H - 1 && mred(b, s, x + 1, v + 1)) v++
+                        var u = y; while (u > 0 && barCol(b, s, x + 1, u - 1, ally)) u--
+                        var v = y; while (v < H - 1 && barCol(b, s, x + 1, v + 1, ally)) v++
                         val fh = v - u + 1
-                        if (fh >= 3 * sc && fh <= 10 * sc) {
-                            val cx = x + tot / 2f
-                            val d = hypot(cx - W * 0.5f, y + 45 * sc - H * 0.52f)
-                            if (d < bestD) { bestD = d; minX = cx; minY = y.toFloat(); found = true }
+                        if (fh >= 2 * sc && fh <= 10 * sc) {
+                            out.add(floatArrayOf(x + tot / 2f, y.toFloat()))
                             x += tot
                         }
                     }
@@ -194,6 +192,103 @@ class BotService : Service() {
                 x++
             }
             y += step
+        }
+        scanTracks(b, s, ally, out)
+    }
+
+    /** Nearly empty minion bars: a pure-black strip right next to a little red/green fill. */
+    private fun scanTracks(b: ByteBuffer, s: Int, ally: Boolean, out: ArrayList<FloatArray>) {
+        val sc = H / 1080f
+        val tot = (61 * sc).toInt()
+        val step = max(1, (2 * sc).toInt())
+        var y = (H * 0.09f).toInt()
+        val yEnd = (H * 0.95f).toInt()
+        while (y < yEnd) {
+            var x = 1
+            while (x < W - 2) {
+                if (blk(b, s, x, y) && !blk(b, s, x - 1, y)) {
+                    var e = x
+                    while (e < W - 1 && blk(b, s, e, y)) e++
+                    val len = e - x
+                    val skip = (x < 480 * sc && y < 380 * sc) || (x > W - 528 * sc && y > 486 * sc)
+                    if (!skip && len >= 12 * sc && len <= 64 * sc) {
+                        var left = false
+                        for (xx in max(0, x - 6) until x) if (fillLoose(b, s, xx, y, ally)) left = true
+                        if (left) {
+                            val xm = (x + e) / 2
+                            var u = y; while (u > 0 && blk(b, s, xm, u - 1)) u--
+                            var v = y; while (v < H - 1 && blk(b, s, xm, v + 1)) v++
+                            val h = v - u + 1
+                            if (h >= 3 * sc && h <= 10 * sc) out.add(floatArrayOf((e - tot / 2).toFloat(), y.toFloat()))
+                        }
+                    }
+                    x = e
+                }
+                x++
+            }
+            y += step
+        }
+    }
+
+    private fun fillLoose(b: ByteBuffer, s: Int, x: Int, y: Int, ally: Boolean): Boolean {
+        val p = px(b, s, x, y); val r = (p shr 16) and 255; val g = (p shr 8) and 255; val bl = p and 255
+        return if (ally) g > 100 && g - r > 30 else r > 90 && r - g > 50 && r - bl > 50
+    }
+
+
+    /** Is the green-ringed hero icon on the minimap standing on a lane? 1 lane, 0 jungle, -1 unknown. */
+    private fun heroOnLane(b: ByteBuffer, s: Int): Int {
+        val mx = (0.120f * H).toInt(); val my = (0.0056f * H).toInt(); val ms = (0.311f * H).toInt()
+        val cell = max(2, (6 * H / 1080f).toInt())
+        val n = ms / cell + 1
+        val cnt = IntArray(n * n)
+        fun green(x: Int, y: Int): Boolean {
+            val p = px(b, s, x, y); val r = (p shr 16) and 255; val g = (p shr 8) and 255
+            return g > 150 && r < 130 && (p and 255) < 110 && g - r > 60
+        }
+        for (y in my until my + ms) for (x in mx until mx + ms)
+            if (green(x, y)) cnt[((y - my) / cell) * n + (x - mx) / cell]++
+        var best = 0; var bi = -1
+        for (cy in 1 until n - 1) for (cx in 1 until n - 1) {
+            var sum = 0
+            for (dy in -1..1) for (dx in -1..1) sum += cnt[(cy + dy) * n + cx + dx]
+            if (sum > best) { best = sum; bi = cy * n + cx }
+        }
+        if (bi < 0 || best < 25) return -1
+        val wx = mx + (bi % n) * cell + cell / 2
+        val wy = my + (bi / n) * cell + cell / 2
+        val rad = (24 * H / 1080f).toInt()
+        var sx = 0L; var sy = 0L; var c = 0
+        for (y in max(my, wy - rad)..min(my + ms - 1, wy + rad))
+            for (x in max(mx, wx - rad)..min(mx + ms - 1, wx + rad))
+                if (green(x, y)) { sx += x; sy += y; c++ }
+        if (c < 25) return -1
+        val u = (sx / c - mx) / ms.toFloat()
+        val v = (sy / c - my) / ms.toFloat()
+        val lane = u < 0.12f || u > 0.88f || v < 0.12f || v > 0.88f || abs(u + v - 1f) < 0.08f
+        return if (lane) 1 else 0
+    }
+
+    /**
+     * Nearest enemy minion to walk to, only when it is lane traffic: either the minimap says your
+     * hero is on a lane, or ally minion bars are right next to the enemy (a wave fight).
+     * A jungle monster in the jungle has neither. Sets minX/minY.
+     */
+    private fun findMinion(b: ByteBuffer, s: Int): Boolean {
+        val enemies = ArrayList<FloatArray>()
+        scanBars(b, s, false, enemies)
+        if (enemies.isEmpty()) return false
+        val inLane = heroOnLane(b, s) == 1
+        val allies = ArrayList<FloatArray>()
+        if (!inLane) scanBars(b, s, true, allies)
+        val sc = H / 1080f
+        var bestD = Float.MAX_VALUE
+        var found = false
+        for (e in enemies) {
+            val ok = inLane || allies.any { hypot(it[0] - e[0], it[1] - e[1]) < 350 * sc }
+            if (!ok) continue
+            val d = hypot(e[0] - W * 0.5f, e[1] + 45 * sc - H * 0.52f)
+            if (d < bestD) { bestD = d; minX = e[0]; minY = e[1]; found = true }
         }
         return found
     }
@@ -369,8 +464,11 @@ class BotService : Service() {
     private fun addTouchWatcher() {
         watch = View(this)
         watch.setOnTouchListener { _, e ->
-            if (e.action == MotionEvent.ACTION_OUTSIDE && SystemClock.uptimeMillis() - lastOwnTap > 300)
-                pausedUntil = SystemClock.uptimeMillis() + 1000
+            // the bot's own gestures also look like "outside touches", so only count touches
+            // that arrive while the bot has been idle for a moment
+            val t = SystemClock.uptimeMillis()
+            if (e.action == MotionEvent.ACTION_OUTSIDE && t - TapService.lastGesture > 600)
+                pausedUntil = t + 1000
             false
         }
         val p = ovParams(1, 1, WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
