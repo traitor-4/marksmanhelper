@@ -6,6 +6,7 @@ import android.content.Intent
 import android.graphics.Path
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 
 /**
@@ -44,12 +45,14 @@ class TapService : AccessibilityService() {
         val b = GestureDescription.Builder()
         for (s in strokes) b.addStroke(s)
         busy = true
+        lastGesture = SystemClock.uptimeMillis()
         val ok = dispatchGesture(b.build(), object : GestureResultCallback() {
             override fun onCompleted(g: GestureDescription?) {
                 if (stick != null) {
                     if (moving) { cur = stick; px = tx; py = ty } else cur = null
                 }
                 busy = false
+                lastGesture = SystemClock.uptimeMillis()
                 h.postDelayed({ pump() }, if (stick != null && moving) 0L else 70L)
             }
             override fun onCancelled(g: GestureDescription?) { cur = null; busy = false }
@@ -60,6 +63,7 @@ class TapService : AccessibilityService() {
     companion object {
         @Volatile var inst: TapService? = null
         @Volatile var wantAttack = false
+        @Volatile var lastGesture = 0L                    // when the bot last sent or finished a gesture
         @Volatile var stickOn = false
         @Volatile var ax = 0f; @Volatile var ay = 0f      // attack button
         @Volatile var jx = 0f; @Volatile var jy = 0f      // joystick centre
@@ -74,6 +78,7 @@ class TapService : AccessibilityService() {
 
         fun swipe(x1: Float, y1: Float, x2: Float, y2: Float, ms: Long): Boolean {
             val s = inst ?: return false
+            lastGesture = SystemClock.uptimeMillis()
             val p = Path().apply { moveTo(x1, y1); lineTo(x2, y2) }
             val g = GestureDescription.Builder()
                 .addStroke(GestureDescription.StrokeDescription(p, 0, ms)).build()
